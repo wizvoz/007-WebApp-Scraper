@@ -1,0 +1,159 @@
+#
+# FILENAME: scraper_firefox_final_v13.py
+# AUTHOR:   Simon & Dora
+# VERSION:  13.0
+#
+# DESCRIPTION:
+# The definitive scraper. Uses Firefox with an existing profile, reads
+# from JSON, is interactive, uses gentle scrolling with visual
+# feedback, and has a countdown timer for delays.
+#
+
+import time
+import os
+import re
+import json
+import sys
+from selenium import webdriver
+from selenium.webdriver.common.by import By
+from selenium.webdriver.common.keys import Keys
+from selenium.webdriver.firefox.options import Options
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+
+## ------------------- CONFIGURATION ------------------- ##
+#
+FIREFOX_PROFILE_PATH = r"C:\Users\Simon\AppData\Roaming\Mozilla\Firefox\Profiles\21mwqfkq.default-release"
+JSON_SOURCE_FILE = "chats.json"
+
+MESSAGE_CONTAINER_SELECTOR = "user-query, model-response"
+PROMPT_SELECTOR = ".query-text-line"
+RESPONSE_SELECTOR = ".model-response-text"
+
+OUTPUT_DIR = "scraped_conversations_final"
+
+## ----------------------------------------------------- ##
+
+def sanitize_filename(name):
+    """Removes characters that are invalid for Windows filenames."""
+    return re.sub(r'[\\/*?:"<>|]', "", name).strip()
+
+def parse_json_file(filename):
+    """Reads the list of chats from the specified JSON file."""
+    try:
+        with open(filename, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        print(f"[INFO] Successfully loaded {len(data)} chats from '{filename}'.")
+        return data
+    except FileNotFoundError:
+        print(f"[FATAL ERROR] The source file '{filename}' was not found.")
+        return []
+    except json.JSONDecodeError:
+        print(f"[FATAL ERROR] The file '{filename}' is not a valid JSON file.")
+        return []
+
+def visual_countdown(seconds):
+    """Displays a simple countdown timer in the terminal."""
+    for i in range(seconds, 0, -1):
+        # The \r moves the cursor to the start of the line, overwriting it
+        print(f"[INFO] Waiting for {i} second(s)...", end='\r')
+        sys.stdout.flush()
+        time.sleep(1)
+    # Print a blank line to move to the next line after the countdown
+    print(" " * 40, end='\r')
+
+
+def main():
+    """Main function to run the scraper."""
+    print("[INFO] Final Scraper v13.0 starting...")
+    
+    all_chats = parse_json_file(JSON_SOURCE_FILE)
+    if not all_chats: return
+
+    try:
+        num_str = input(f"> How many of the {len(all_chats)} chats would you like to scrape? (Press Enter for all): ")
+        num_to_scrape = int(num_str) if num_str else len(all_chats)
+        delay_str = input(f"> How many seconds to wait between chats? (e.g., 5): ")
+        delay_seconds = int(delay_str) if delay_str else 5
+    except ValueError:
+        print("[FATAL ERROR] Invalid input. Please enter numbers only."); return
+
+    chats_to_process = all_chats[:num_to_scrape]
+    print(f"\n[INFO] Preparing to scrape {len(chats_to_process)} chats with a {delay_seconds}-second delay.")
+
+    driver = None
+    try:
+        print("[INFO] Launching Firefox with your profile... (This initial launch can take 30+ seconds)")
+        options = Options()
+        options.profile = FIREFOX_PROFILE_PATH
+        driver = webdriver.Firefox(options=options)
+        print("[SUCCESS] Firefox launched successfully.")
+
+        os.makedirs(OUTPUT_DIR, exist_ok=True)
+
+        for chat in chats_to_process:
+            chat_id, chat_title, chat_url = chat.get('id', 'N/A'), chat.get('title', 'Untitled'), chat.get('url', 'URL_MISSING')
+            
+            print(f"\n{'='*20} Processing Chat #{chat_id} {'='*20}")
+            print(f"TITLE: {chat_title}")
+            
+            try:
+                driver.get(chat_url)
+                print("[INFO] Waiting for page to load (up to 20 seconds)...")
+                WebDriverWait(driver, 20).until(
+                    EC.presence_of_element_located((By.CSS_SELECTOR, MESSAGE_CONTAINER_SELECTOR))
+                )
+
+                body = driver.find_element(By.TAG_NAME, 'body')
+                
+                # --- New "Home Key" scroll to get the beginning ---
+                print("[INFO] Jumping to the top of the conversation...")
+                body.send_keys(Keys.HOME)
+                time.sleep(2)
+
+                print("[INFO] Scrolling down to load all content...", end='')
+                sys.stdout.flush()
+                scroll_attempts = 40 
+                for _ in range(scroll_attempts):
+                    body.send_keys(Keys.PAGE_DOWN)
+                    print(".", end='') # <-- Visual progress dot
+                    sys.stdout.flush()
+                    time.sleep(0.5)
+                print("\n[INFO] Finished scrolling.")
+
+                sanitized_title = sanitize_filename(chat_title)[:150]
+                filename = os.path.join(OUTPUT_DIR, f"{chat_id:03d}_{sanitized_title}.txt")
+                
+                full_conversation = f"ID: {chat_id}\nURL: {chat_url}\nTITLE: {chat_title}\n\n---\n\n"
+                
+                message_containers = driver.find_elements(By.CSS_SELECTOR, MESSAGE_CONTAINER_SELECTOR)
+                for container in message_containers:
+                    if container.tag_name == 'user-query':
+                        prompt_lines = container.find_elements(By.CSS_SELECTOR, PROMPT_SELECTOR)
+                        prompt_text = "\n".join([line.text for line in prompt_lines])
+                        full_conversation += f"## PROMPT ##\n\n{prompt_text}\n\n---\n\n"
+                    elif container.tag_name == 'model-response':
+                        try:
+                            response = container.find_element(By.CSS_SELECTOR, RESPONSE_SELECTOR)
+                            full_conversation += f"## RESPONSE ##\n\n{response.text}\n\n---\n\n"
+                        except: pass
+
+                with open(filename, 'w', encoding='utf-8') as f:
+                    f.write(full_conversation)
+                print(f"[SUCCESS] Saved conversation to '{filename}'")
+
+            except Exception as e:
+                print(f"\n[ERROR] Failed to scrape chat #{chat_id}. Error: {e}")
+            
+            visual_countdown(delay_seconds) # <-- New countdown timer
+            
+    except Exception as e:
+        print(f"\n[FATAL ERROR] An unexpected error occurred: {e}")
+    
+    finally:
+        if driver:
+            driver.quit()
+        print("\n--- Scraping complete. ---")
+
+if __name__ == "__main__":
+    main()
