@@ -1,0 +1,11 @@
+﻿# .gitignore content
+# --- Core project files and directories to ignore
+venv/
+__pycache__/
+*.pyc
+
+# --- Directories for local use only
+_data/
+_localDocs/
+_recycle/
+_sources/
