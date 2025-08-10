@@ -1,6 +1,6 @@
 ﻿# .gitignore content
 # --- Core project files and directories to ignore
-venv/
+.venv/
 __pycache__/
 *.pyc
 
