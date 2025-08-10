@@ -1,11 +1,11 @@
 #
-# FILENAME: scraper_v15.py
+# FILENAME: scraper_v34_final.py
 # AUTHOR:   Simon & Dora
-# VERSION:  15.0
+# VERSION:  34.0 (Definitive Hybrid Version with Bug Fix)
 #
 # DESCRIPTION:
-# The definitive scraper. Uses a powerful JavaScript-based scrolling 
-# method to force-load the beginning of long conversations.
+# The definitive scraper. This version restores a missing helper function
+# from v33 and represents the complete, working code.
 #
 
 import time
@@ -22,15 +22,17 @@ from selenium.webdriver.support import expected_conditions as EC
 
 ## ------------------- CONFIGURATION ------------------- ##
 #
-FIREFOX_PROFILE_PATH = r"C:\Users\Simon\AppData\Roaming\Mozilla\Firefox\Profiles\21mwqfkq.default-release"
+FIREFOX_PROFILE_PATH = r"C:\Users\SimonC\AppData\Roaming\Mozilla\Firefox\Profiles\dc04l8pf.default-release"
 JSON_SOURCE_FILE = "chats.json"
 
-SCROLLABLE_ELEMENT_SELECTOR = ".chat-history"
+# --- Selectors confirmed for Firefox ---
+SCROLLABLE_ELEMENT_SELECTOR = ".chat-container"
 MESSAGE_CONTAINER_SELECTOR = "user-query, model-response"
 PROMPT_SELECTOR = ".query-text-line"
 RESPONSE_SELECTOR = ".model-response-text"
 
-OUTPUT_DIR = "scraped_conversations_final"
+# Versioned output directory
+OUTPUT_DIR = "output_v34"
 
 ## ----------------------------------------------------- ##
 
@@ -38,6 +40,42 @@ def sanitize_filename(name):
     """Removes characters that are invalid for Windows filenames."""
     return re.sub(r'[\\/*?:"<>|]', "", name).strip()
 
+def clean_text(text):
+    """Strips leading/trailing whitespace and collapses multiple newlines."""
+    if not text: return ""
+    stripped_text = text.strip()
+    return re.sub(r'\n{3,}', '\n\n', stripped_text)
+
+def parse_id_string(id_string, max_id):
+    """Parses a string like '1, 5, 10-15' into a list of integers."""
+    ids = set()
+    parts = id_string.split(',')
+    for part in parts:
+        part = part.strip()
+        if not part: continue
+        if '-' in part:
+            try:
+                start, end = map(int, part.split('-'))
+                if start > end: start, end = end, start
+                for i in range(start, end + 1):
+                    if 1 <= i <= max_id:
+                        ids.add(i)
+            except ValueError: print(f"[WARNING] Invalid range '{part}' ignored.")
+        else:
+            try:
+                num = int(part)
+                if 1 <= num <= max_id:
+                    ids.add(num)
+            except ValueError: print(f"[WARNING] Invalid number '{part}' ignored.")
+    return sorted(list(ids))
+
+def visual_countdown(seconds):
+    """Displays a simple countdown timer in the terminal."""
+    for i in range(seconds, 0, -1):
+        print(f"[INFO] Waiting for {i} second(s)...", end='\r'); sys.stdout.flush()
+        time.sleep(1)
+    print(" " * 40, end='\r')
+    
 def parse_json_file(filename):
     """Reads the list of chats from the specified JSON file."""
     try:
@@ -50,34 +88,33 @@ def parse_json_file(filename):
     except json.JSONDecodeError:
         print(f"[FATAL ERROR] The file '{filename}' is not a valid JSON file."); return []
 
-def visual_countdown(seconds):
-    """Displays a simple countdown timer in the terminal."""
-    for i in range(seconds, 0, -1):
-        print(f"[INFO] Waiting for {i} second(s)...", end='\r'); sys.stdout.flush()
-        time.sleep(1)
-    print(" " * 40, end='\r')
-
 def main():
     """Main function to run the scraper."""
-    print("[INFO] Final Scraper v15.0 (JS Scroll) starting...")
+    print(f"[INFO] Final Scraper {__file__} starting...")
     
     all_chats = parse_json_file(JSON_SOURCE_FILE)
     if not all_chats: return
 
     try:
-        num_str = input(f"> How many of the {len(all_chats)} chats would you like to scrape? (Press Enter for all): ")
-        num_to_scrape = int(num_str) if num_str else len(all_chats)
-        delay_str = input(f"> How many seconds to wait between chats? (e.g., 5): ")
-        delay_seconds = int(delay_str) if delay_str else 5
+        id_str = input(f"> Which of the {len(all_chats)} chats would you like to scrape? (e.g., '1-5, 8, 12'): ")
+        if not id_str:
+            print("[INFO] No selection made. Exiting."); return
+        
+        target_ids = parse_id_string(id_str, len(all_chats))
+        if not target_ids:
+            print("[ERROR] No valid chat IDs selected. Exiting."); return
+
+        delay_str = input(f"> How many seconds to wait between chats? (e.g., 3): ")
+        delay_seconds = int(delay_str) if delay_str else 3
     except ValueError:
         print("[FATAL ERROR] Invalid input. Please enter numbers only."); return
 
-    chats_to_process = all_chats[:num_to_scrape]
-    print(f"\n[INFO] Preparing to scrape {len(chats_to_process)} chats with a {delay_seconds}-second delay.")
+    chats_to_process = [chat for chat in all_chats if chat.get('id') in target_ids]
+    print(f"\n[INFO] Preparing to scrape {len(chats_to_process)} selected chats with a {delay_seconds}-second delay.")
 
     driver = None
     try:
-        print("[INFO] Launching Firefox with your profile... (This can take some time)")
+        print("[INFO] Launching Firefox with your profile...")
         options = Options()
         options.profile = FIREFOX_PROFILE_PATH
         driver = webdriver.Firefox(options=options)
@@ -96,38 +133,16 @@ def main():
                 WebDriverWait(driver, 20).until(
                     EC.presence_of_element_located((By.CSS_SELECTOR, SCROLLABLE_ELEMENT_SELECTOR))
                 )
-
-                scroll_area = driver.find_element(By.CSS_SELECTOR, SCROLLABLE_ELEMENT_SELECTOR)
                 
-                # --- NEW: Powerful JavaScript scroll-to-top loop ---
-                print("[INFO] Forcing scroll to top to load full history...", end=''); sys.stdout.flush()
-                last_height = -1
-                attempts = 0
-                max_attempts = 15 # How many times to try scrolling up
+                print("\n" + "="*50)
+                print("ACTION REQUIRED: Manually scroll to the TOP of the conversation")
+                print("                 in the Firefox window to load the full history.")
+                print("="*50 + "\n")
+                input(">>> Once at the top, press Enter here to continue scraping...")
+                time.sleep(2)
                 
-                while attempts < max_attempts:
-                    driver.execute_script("arguments[0].scrollTop = 0;", scroll_area)
-                    time.sleep(2) # Crucial wait for content to load
-                    
-                    current_height = driver.execute_script("return arguments[0].scrollHeight;", scroll_area)
-                    
-                    if current_height == last_height:
-                        break # Height is stable, we've reached the top
-                    
-                    last_height = current_height
-                    print(".", end=''); sys.stdout.flush()
-                    attempts += 1
-                print("\n[INFO] Finished scrolling up.")
-                # --- End of new scroll logic ---
-
-                print("[INFO] Scrolling down to ensure all content is loaded...", end=''); sys.stdout.flush()
-                scroll_attempts = 40 
-                for _ in range(scroll_attempts):
-                    scroll_area.send_keys(Keys.PAGE_DOWN)
-                    print(".", end=''); sys.stdout.flush()
-                    time.sleep(0.5)
-                print("\n[INFO] Finished scrolling down.")
-
+                print("[INFO] Beginning scrape...")
+                
                 sanitized_title = sanitize_filename(chat_title)[:150]
                 filename = os.path.join(OUTPUT_DIR, f"{chat_id:03d}_{sanitized_title}.txt")
                 
@@ -137,16 +152,15 @@ def main():
                 for container in message_containers:
                     if container.tag_name == 'user-query':
                         prompt_lines = container.find_elements(By.CSS_SELECTOR, PROMPT_SELECTOR)
-                        prompt_text = "\n".join([line.text for line in prompt_lines])
-                        full_conversation += f"## PROMPT ##\n\n{prompt_text}\n\n---\n\n"
+                        prompt_text = "\n".join([line.text for line in prompt_lines if line.text.strip()])
+                        full_conversation += f"## PROMPT ##\n\n{clean_text(prompt_text)}\n\n---\n\n"
                     elif container.tag_name == 'model-response':
                         try:
                             response = container.find_element(By.CSS_SELECTOR, RESPONSE_SELECTOR)
-                            full_conversation += f"## RESPONSE ##\n\n{response.text}\n\n---\n\n"
+                            full_conversation += f"## RESPONSE ##\n\n{clean_text(response.text)}\n\n---\n\n"
                         except: pass
 
-                with open(filename, 'w', encoding='utf-8') as f:
-                    f.write(full_conversation)
+                with open(filename, 'w', encoding='utf-8') as f: f.write(full_conversation)
                 print(f"[SUCCESS] Saved conversation to '{filename}'")
 
             except Exception as e:
